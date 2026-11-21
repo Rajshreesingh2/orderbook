@@ -1,16 +1,31 @@
-# Limit Order Book in C++20
+# Low-latency building blocks in C++20
 
-A price-time priority matching engine, built twice: a simple, obviously-correct v1, and a v2 optimized for tail latency. A randomized differential test checks that v2 produces exactly the same trades and book state as v1 on 3.6M operations.
+1. **Limit order book** — price-time priority matching engine, built twice (simple v1, fast v2).
+2. **Lock-free SPSC queue** — three implementations compared, plus a producer → queue → order-book pipeline.
+
+Every optimized component is checked against a simple reference: a randomized differential test (v1 vs v2, 3.6M random ops) and a pipeline test (2 threads vs 1 thread, identical results). Tests run under AddressSanitizer, UBSan and ThreadSanitizer.
 
 ## Build and run
 ```
-make test          # unit + differential tests (AddressSanitizer + UBSan)
-make bench         # v1 vs v2 benchmark
-./build/bench 2    # same, pinned to CPU core 2
+make test          # unit + differential + SPSC tests (ASan + UBSan)
+make tsan          # SPSC tests under ThreadSanitizer
+make bench         # order book: v1 vs v2
+./build/bench 2    #   ...pinned to CPU core 2
+make bench_spsc    # queues + pipeline
+./build/bench_spsc 2 4   # ...producer on core 2, consumer on core 4 (use two different physical cores)
 ```
 
-## Results
-1M operations (75% limit orders, 25% cancels, 200 price levels), WSL2, pinned to one core. Timer overhead (~15 ns) is included in every latency.
+## 1. Order book
+
+| | v1 | v2 |
+|---|---|---|
+| Orders | `std::list` node per order | preallocated arena + free list |
+| Price levels | `std::map` | flat array indexed by price tick |
+| Order id lookup | `std::unordered_map` | open-addressing hash, fixed capacity |
+| Trade output | new `vector` per call | caller-provided, reused vector |
+| Best price | tree walk | cached best bid/ask index |
+
+Results: 1M operations (75% limit orders, 25% cancels, 200 price levels), WSL2, pinned to one core. Timer overhead (~15 ns) is included in every latency.
 
 | | v1 | v2 |
 |---|---|---|
@@ -22,26 +37,27 @@ make bench         # v1 vs v2 benchmark
 
 Median latency is unchanged; the gains are in tail latency and throughput, which is where heap allocation and cache misses hurt.
 
-## Design
-| | v1 | v2 |
-|---|---|---|
-| Orders | `std::list` node per order | preallocated arena + free list |
-| Price levels | `std::map` | flat array indexed by price tick |
-| Order id lookup | `std::unordered_map` | open-addressing hash, fixed capacity |
-| Trade output | new `vector` per call | caller-provided, reused vector |
+Limits of v2 (deliberate trade-offs): prices must lie in a fixed range; fixed order capacity (a full arena rejects new orders); order id 0 is reserved.
 
+## 2. SPSC queue (`include/spsc_queue.hpp`)
 
-	MutexQueue	SpscQueueNaive	SpscQueue
-Throughput (Mmsg/s)	9.2	17.5	252
-One-way latency p50 (ns)	346	132	54
-One-way latency p99 (ns)	732	175	144
+| | MutexQueue | SpscQueueNaive | SpscQueue |
+|---|---|---|---|
+| Synchronization | `std::mutex` | atomics, seq_cst | atomics, acquire/release |
+| head/tail layout | — | same cache line (false sharing) | separate 64-byte lines |
+| Reads other side's index | always (under lock) | on every call | only when ring looks full/empty (cached copy) |
 
-Replace the pipeline line with: Pipeline (1M orders): single thread 12.6 Mops/s vs two threads via SpscQueue 11.7 Mops/s, results identical. The queue decouples ingestion from matching; it doesn't add matching throughput.
-| Best price | tree walk | cached best bid/ask index |
+Why it is correct: the producer is the only writer of `tail_` and publishes a slot with a *release* store; the consumer reads `tail_` with an *acquire* load, so it sees the element's contents. The consumer returns slots to the producer the same way through `head_`. Indices only grow and wrap by masking, which removes the "full vs empty" ambiguity.
 
-## Limits of v2 (deliberate trade-offs)
-- Prices must lie in a fixed range; others are rejected.
-- Fixed order capacity; when the arena is full, new orders are rejected.
-- Order id 0 is reserved.
+Results (fill in from your machine: `./build/bench_spsc <core> <core>`):
 
+| | MutexQueue | SpscQueueNaive | SpscQueue |
+|---|---|---|---|
+| Throughput (Mmsg/s) | | | |
+| One-way latency p50 (ns) | | | |
+| One-way latency p99 (ns) | | | |
 
+Pipeline (1M orders): single thread ___ Mops/s vs two threads via SpscQueue ___ Mops/s, results identical.
+
+## Next
+Bitmap of non-empty price levels, market/IOC orders, kernel-bypass style input, cache-miss profiling.

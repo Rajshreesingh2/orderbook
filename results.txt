@@ -1,0 +1,12 @@
+./build/bench
+ops: 1000000   timer overhead (median): 17 ns  <- included in every latency below
+
+                     v1         v2
+p50                 124        120   ns
+p99                 653        554   ns
+p99.9              1816       1182   ns
+max             7797152     965816   ns (OS jitter; pin a core to reduce)
+throughput         7.37      15.01   Mops/s
+
+speedup (p50): 1.0x   (throughput): 2.0x
+trades  v1=581068 v2=581068   resting v1=120927 v2=120927   results IDENTICAL
