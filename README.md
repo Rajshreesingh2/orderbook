@@ -36,6 +36,4 @@ Median latency is unchanged; the gains are in tail latency and throughput, which
 - Fixed order capacity; when the arena is full, new orders are rejected.
 - Order id 0 is reserved.
 
-## Next
-Bitmap of non-empty levels, market/IOC orders, lock-free SPSC input queue, cache-miss profiling.r use a flat hash map
-5. Pin the thread to a core, re-measure p99 / p99.9
+
