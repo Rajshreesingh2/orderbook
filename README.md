@@ -29,6 +29,14 @@ Median latency is unchanged; the gains are in tail latency and throughput, which
 | Price levels | `std::map` | flat array indexed by price tick |
 | Order id lookup | `std::unordered_map` | open-addressing hash, fixed capacity |
 | Trade output | new `vector` per call | caller-provided, reused vector |
+
+
+	MutexQueue	SpscQueueNaive	SpscQueue
+Throughput (Mmsg/s)	9.2	17.5	252
+One-way latency p50 (ns)	346	132	54
+One-way latency p99 (ns)	732	175	144
+
+Replace the pipeline line with: Pipeline (1M orders): single thread 12.6 Mops/s vs two threads via SpscQueue 11.7 Mops/s, results identical. The queue decouples ingestion from matching; it doesn't add matching throughput.
 | Best price | tree walk | cached best bid/ask index |
 
 ## Limits of v2 (deliberate trade-offs)
