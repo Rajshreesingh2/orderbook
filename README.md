@@ -1,28 +1,41 @@
-# Limit Order Book (v1: correctness baseline)
+# Limit Order Book in C++20
 
-Price-time priority matching engine in C++20.
+A price-time priority matching engine, built twice: a simple, obviously-correct v1, and a v2 optimized for tail latency. A randomized differential test checks that v2 produces exactly the same trades and book state as v1 on 3.6M operations.
 
-## Build & run
-    cmake -B build && cmake --build build
-    ./build/tests     # correctness (built with ASan + UBSan, asserts enabled)
-    ./build/bench     # baseline latency numbers
+## Build and run
+```
+make test          # unit + differential tests (AddressSanitizer + UBSan)
+make bench         # v1 vs v2 benchmark
+./build/bench 2    # same, pinned to CPU core 2
+```
 
-## Design (v1)
-- Bids: `std::map<Price, std::list<Order>, greater>`, asks: `std::map<Price, std::list<Order>>`
-- `std::list` per price level = FIFO (time priority)
-- `unordered_map<OrderId, Locator>` for cancel lookup (stored list iterator)
-- Prices are integer ticks; trades execute at the resting order's price
+## Results
+1M operations (75% limit orders, 25% cancels, 200 price levels), WSL2, pinned to one core. Timer overhead (~15 ns) is included in every latency.
 
-## Baseline results (fill in from your machine)
-| metric | ns |
-|---|---|
-| p50 | |
-| p99 | |
-| p99.9 | |
+| | v1 | v2 |
+|---|---|---|
+| p50 | 111 ns | 111 ns |
+| p99 | 632 ns | 444 ns |
+| p99.9 | 1,461 ns | 686 ns |
+| max | 7.9 ms | 0.8 ms |
+| Throughput | 8.0 M ops/s | 17.6 M ops/s |
 
-## Roadmap
-1. Profile with `perf stat` / `perf record` (cache misses, allocations)
-2. Replace `std::list` + `std::map` with contiguous / pooled storage
-3. Remove heap allocation from the hot path
-4. Reserve the id index, or use a flat hash map
+Median latency is unchanged; the gains are in tail latency and throughput, which is where heap allocation and cache misses hurt.
+
+## Design
+| | v1 | v2 |
+|---|---|---|
+| Orders | `std::list` node per order | preallocated arena + free list |
+| Price levels | `std::map` | flat array indexed by price tick |
+| Order id lookup | `std::unordered_map` | open-addressing hash, fixed capacity |
+| Trade output | new `vector` per call | caller-provided, reused vector |
+| Best price | tree walk | cached best bid/ask index |
+
+## Limits of v2 (deliberate trade-offs)
+- Prices must lie in a fixed range; others are rejected.
+- Fixed order capacity; when the arena is full, new orders are rejected.
+- Order id 0 is reserved.
+
+## Next
+Bitmap of non-empty levels, market/IOC orders, lock-free SPSC input queue, cache-miss profiling.r use a flat hash map
 5. Pin the thread to a core, re-measure p99 / p99.9
